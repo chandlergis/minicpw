@@ -26,30 +26,17 @@ class ImageProcessor(Plugin):
         self.config = self.load_config()
         logger.info("[image_processor] Initialized")
 
-    def load_config(self):
-        curdir = os.path.dirname(__file__)
-        config_path = os.path.join(curdir, "config.json")
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logger.error(f"Config file not found: {config_path}")
-            return {}
-
     def on_handle_context(self, e_context: EventContext):
-        if e_context["context"].type not in [ContextType.TEXT, ContextType.IMAGE]:
-            return
+        if e_context["context"].type == ContextType.IMAGE:
+            image_path = e_context['context'].content  # Assuming the content contains the image path or URL
+            self.process_image(image_path, e_context)
+        elif e_context["context"].type == ContextType.TEXT and "process image" in e_context['context'].content.lower():
+            # Use default image URL from config if specific command is given in text
+            image_path = self.config.get("image_url")
+            self.process_image(image_path, e_context)
+        e_context.action = EventAction.BREAK
 
-        content = e_context['context'].content
-        if e_context["context"].type == ContextType.TEXT:
-            # Handle text command to trigger image processing
-            if "process image" in content.lower():
-                self.process_image(e_context)
-            e_context.action = EventAction.BREAK
-            return
-
-    def process_image(self, e_context):
-        image_url = self.config.get("image_url")
+    def process_image(self, image_url, e_context):
         image_path = self.download_image(image_url)
         if not image_path:
             e_context["context"].content = "Failed to download image"
@@ -59,7 +46,7 @@ class ImageProcessor(Plugin):
         upload_result = self.client.predict(
             image=image_path,
             _chatbot=[],
-            api_name="/upload_img"
+            api_name=self.config['api_names']['upload_image']
         )
         logger.info(f"Image upload result: {upload_result}")
 
@@ -74,7 +61,7 @@ class ImageProcessor(Plugin):
             top_p=0.8,
             top_k=100,
             temperature=0.7,
-            api_name="/respond"
+            api_name=self.config['api_names']['respond']
         )
         logger.info(f"Question result: {question_result}")
         e_context["context"].content = f"Image description: {question_result}"

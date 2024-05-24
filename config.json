@@ -1,0 +1,19 @@
+{
+    "image_url": "http://10.0.100.86:19000/aatrox/658413330000000009026e37_5.png",
+    "lang": "eng+chi_sim",
+    "prefix_verb": [
+        "看",
+        "读"
+    ],
+    "prefix_noun": [
+        "图",
+        "这个"
+    ],
+    "always_read_image": true,
+    "default_allow_ocr": true,
+    "free_cuda_memory": true,
+    "api_names": {
+        "upload_image": "/upload_img",
+        "respond": "/respond"
+    }
+}
