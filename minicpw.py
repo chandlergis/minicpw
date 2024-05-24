@@ -1,71 +1,91 @@
+import os
+import json
 import requests
-from gradio_client import Client
+from PIL import Image
+import io
 import plugins
-from plugins import *
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
+from channel.chat_message import ChatMessage
 from common.log import logger
+from plugins import *
+from gradio_client import Client
 
-# 初始化Gradio客户端
-client = Client("openbmb/MiniCPM-Llama3-V-2_5")
+@plugins.register(
+    name="image_processor",
+    desire_priority=0,
+    hidden=False,
+    desc="A plugin that downloads and processes images using Gradio API",
+    version="1.0",
+    author="your_name",
+)
+class ImageProcessor(Plugin):
+    def init(self):
+        super().init()
+        self.client = Client("openbmb/MiniCPM-Llama3-V-2_5")
+        self.config = self.load_config()
+        logger.info("[image_processor] Initialized")
 
-@plugins.register(name="ImageRecognitionPlugin",
-                  desc="识别图片内容",
-                  version="1.0",
-                  author="Cool",
-                  desire_priority=100)
-class ImageRecognitionPlugin(Plugin):
-
-    def __init__(self):
-        super().__init__()
-        self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
-        logger.info(f"[{__class__.__name__}] initialized")
-
-    def get_help_text(self, **kwargs):
-        return "发送图片获取内容描述"
+    def load_config(self):
+        curdir = os.path.dirname(__file__)
+        config_path = os.path.join(curdir, "config.json")
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            logger.error(f"Config file not found: {config_path}")
+            return {}
 
     def on_handle_context(self, e_context: EventContext):
-        if e_context['context'].type != ContextType.IMAGE:
+        if e_context["context"].type not in [ContextType.TEXT, ContextType.IMAGE]:
             return
-        image_url = e_context['context'].content
+
+        content = e_context['context'].content
+        if e_context["context"].type == ContextType.TEXT:
+            # Handle text command to trigger image processing
+            if "process image" in content.lower():
+                self.process_image(e_context)
+            e_context.action = EventAction.BREAK
+            return
+
+    def process_image(self, e_context):
+        image_url = self.config.get("image_url")
         image_path = self.download_image(image_url)
-        if image_path:
-            description = self.recognize_image(image_path)
-            if description:
-                reply = Reply(type=ReplyType.TEXT, content=description)
-            else:
-                reply = Reply(type=ReplyType.ERROR, content="无法识别图片内容，请稍后再试。")
+        if not image_path:
+            e_context["context"].content = "Failed to download image"
+            return
+
+        # Upload the image and get the description
+        upload_result = self.client.predict(
+            image=image_path,
+            _chatbot=[],
+            api_name="/upload_img"
+        )
+        logger.info(f"Image upload result: {upload_result}")
+
+        # Now send a text question to describe the image
+        question_result = self.client.predict(
+            _question="请详细且充分的描述图像内容及相关信息",
+            _chat_bot=[],
+            params_form="Sampling",
+            num_beams=3,
+            repetition_penalty=1.2,
+            repetition_penalty_2=1.05,
+            top_p=0.8,
+            top_k=100,
+            temperature=0.7,
+            api_name="/respond"
+        )
+        logger.info(f"Question result: {question_result}")
+        e_context["context"].content = f"Image description: {question_result}"
+
+    def download_image(self, url):
+        response = requests.get(url)
+        if response.status_code == 200:
+            image_path = os.path.join("temp_images", os.path.basename(url))
+            with open(image_path, 'wb') as f:
+                f.write(response.content)
+            return image_path
         else:
-            reply = Reply(type=ReplyType.ERROR, content="图片下载失败。")
-        
-        e_context["reply"] = reply
-        e_context.action = EventAction.BREAK_PASS
-
-    def download_image(self, image_url):
-        try:
-            response = requests.get(image_url)
-            if response.status_code == 200:
-                image_path = 'downloaded_image.png'
-                with open(image_path, 'wb') as f:
-                    f.write(response.content)
-                return image_path
-            else:
-                logger.error("Failed to download image")
-        except Exception as e:
-            logger.error(f"Error downloading image: {e}")
-        return None
-
-    def recognize_image(self, image_path):
-        try:
-            upload_result = client.predict(
-                image=image_path,
-                _chatbot=[],
-                api_name="/upload_img"
-            )
-            if upload_result:
-                # Assuming the response includes a description
-                return upload_result.get('description', 'No description found')
-        except Exception as e:
-            logger.error(f"Error recognizing image: {e}")
-        return "识别失败"
-
+            logger.error("Failed to download image")
+            return None
